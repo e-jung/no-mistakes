@@ -25,9 +25,15 @@ type GlobalConfig struct {
 	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
 	CITimeout            time.Duration       `yaml:"-"`
 	LogLevel             string              `yaml:"log_level"`
-	AutoFix              AutoFixRaw
-	Intent               IntentRaw
-	Test                 TestRaw
+	// AllowRepoCommands opts in to honoring code-executing fields
+	// (commands.{test,lint,format}) from a contributor's pushed branch
+	// instead of the trusted default-branch copy. Default false: repo
+	// commands are only ever loaded from the default branch so a pushed
+	// SHA cannot inject shell on the maintainer's daemon host.
+	AllowRepoCommands bool `yaml:"allow_repo_commands"`
+	AutoFix           AutoFixRaw
+	Intent            IntentRaw
+	Test              TestRaw
 }
 
 // globalConfigRaw is the on-disk YAML representation with duration as string.
@@ -40,6 +46,7 @@ type globalConfigRaw struct {
 	CITimeout            string              `yaml:"ci_timeout"`
 	BabysitTimeout       string              `yaml:"babysit_timeout"`
 	LogLevel             string              `yaml:"log_level"`
+	AllowRepoCommands    bool                `yaml:"allow_repo_commands"`
 	AutoFix              AutoFixRaw          `yaml:"auto_fix"`
 	Intent               IntentRaw           `yaml:"intent"`
 	Test                 TestRaw             `yaml:"test"`
@@ -474,6 +481,7 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 	if raw.LogLevel != "" {
 		cfg.LogLevel = raw.LogLevel
 	}
+	cfg.AllowRepoCommands = raw.AllowRepoCommands
 	if raw.AutoFix.CI == nil {
 		raw.AutoFix.CI = raw.AutoFix.Babysit
 	}
@@ -498,6 +506,19 @@ func LoadRepo(dir string) (*RepoConfig, error) {
 		return nil, fmt.Errorf("read repo config: %w", err)
 	}
 
+	return parseRepoConfig(data)
+}
+
+// LoadRepoFromBytes parses per-repo config from raw YAML bytes. It is the
+// trusted-config entry point: callers that read .no-mistakes.yaml from a
+// specific git ref (e.g. the default branch) use this to avoid honoring a
+// contributor's checked-out copy.
+func LoadRepoFromBytes(data []byte) (*RepoConfig, error) {
+	return parseRepoConfig(data)
+}
+
+func parseRepoConfig(data []byte) (*RepoConfig, error) {
+	cfg := &RepoConfig{}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
@@ -506,6 +527,37 @@ func LoadRepo(dir string) (*RepoConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// EffectiveRepoConfig returns the repo config that should drive the pipeline
+// given a pushed-branch copy and the trusted default-branch copy.
+//
+// Code-executing fields (Commands) are taken only from the trusted copy when
+// it is present, so a contributor's pushed branch cannot inject shell
+// commands that run on the maintainer's daemon host. When allowRepoCommands
+// is true the maintainer has explicitly opted in to honoring the
+// pushed-branch commands. When there is no trusted copy and the maintainer
+// has not opted in, Commands is forced empty rather than falling back to the
+// pushed branch — this blocks the supply-chain vector for repos that ship
+// .no-mistakes.yaml only on feature branches.
+//
+// Non-executing fields (agent override, ignore patterns, auto-fix, intent,
+// test) are always taken from the pushed copy, matching prior behavior, since
+// they cannot run arbitrary shell.
+func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
+	if pushed == nil {
+		pushed = &RepoConfig{}
+	}
+	effective := *pushed
+	if allowRepoCommands {
+		return &effective
+	}
+	if trusted != nil {
+		effective.Commands = trusted.Commands
+	} else {
+		effective.Commands = Commands{}
+	}
+	return &effective
 }
 
 // ParseLogLevel converts a log level string to slog.Level.

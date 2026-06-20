@@ -95,6 +95,13 @@ Safest local verification sequence after non-trivial changes:
 - Prefer targeted package tests while iterating, then finish with `go test -race ./...` and `make e2e` when your change affects those process or I/O boundaries.
 - The e2e suite lives behind the `e2e` build tag, so it is excluded from `go test ./...` and runs separately in CI via `make e2e`.
 
+**Repo Config Trust Boundary (security)**
+
+- The daemon runs `commands.*` from `.no-mistakes.yaml` verbatim via `sh -c`. To prevent supply-chain RCE, the code-executing fields (`commands.{test,lint,format}`) are loaded from `origin/<defaultBranch>` (the trusted default branch), never from the pushed SHA. See `internal/daemon/manager.go` `startRun` + `loadTrustedRepoConfig`, and `config.EffectiveRepoConfig`.
+- Non-executing fields (`agent`, `ignore_patterns`, `auto_fix`, `intent`, `test`) are still read from the pushed branch.
+- A maintainer opts in to pushed-branch commands with `allow_repo_commands: true` in global config (default `false`). When changing this logic, keep `commands.*` locked to the default branch and update the e2e test `TestRepoConfigCommandsFromDefaultBranch`.
+- The e2e harness models a trusted single-developer environment, so it defaults `allow_repo_commands` to `true` via `SetupOpts.AllowRepoCommands`; security tests pass `false` to exercise the secure default.
+
 **When Making Changes**
 
 - Whenever you must bring in new dependencies, check latest documentation for knowledge, and discuss with the user.

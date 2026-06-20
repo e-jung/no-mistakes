@@ -32,6 +32,10 @@ ci_timeout: "4h"
 
 log_level: info
 
+# Opt in to honoring commands.* from pushed branches. Default false: repo
+# commands are only ever loaded from the default branch.
+# allow_repo_commands: false
+
 auto_fix:
   rebase: 3
   review: 0
@@ -193,6 +197,17 @@ Daemon log verbosity.
 | Type | `string` |
 | Values | `debug`, `info`, `warn`, `error` |
 | Default | `info` |
+
+### allow_repo_commands
+
+Opt in to honoring the code-executing fields `commands.{test,lint,format}` from a contributor's pushed branch instead of the trusted default-branch copy.
+
+| | |
+|---|---|
+| Type | `bool` |
+| Default | `false` |
+
+By default the daemon reads `commands.*` from your default branch (e.g. `origin/main`) so a pushed SHA cannot inject shell on the daemon host. Leave this `false` for any repo that accepts contributions. Set it to `true` only for a single-developer environment where you trust every branch you push (for example, a personal repo gated by your own daemon). See [Repo Config Reference](./repo-config.md) for the trust-boundary details.
 
 ### auto_fix
 

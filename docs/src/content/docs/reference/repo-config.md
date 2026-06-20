@@ -5,6 +5,12 @@ description: All fields for .no-mistakes.yaml.
 
 Per-repo configuration lives in `.no-mistakes.yaml` at the root of your repository.
 
+:::caution[Security: commands are read from the default branch]
+`commands.*` (and only those fields) execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`. To prevent a supply-chain attack where a contributor lands a hostile `commands.*` on a gated branch, the daemon always reads the **code-executing fields from your default branch** (e.g. `origin/main`), never from the pushed SHA. Commit the `commands` you want the gate to run to your default branch. Non-executing fields (`agent`, `ignore_patterns`, `auto_fix`, `intent`, `test`) are still read from the pushed branch.
+
+If you genuinely want per-branch `commands` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](./global-config.md#allow_repo_commands) in global config. This re-enables the previous behavior with eyes open.
+:::
+
 ```yaml
 # .no-mistakes.yaml
 

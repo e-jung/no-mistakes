@@ -140,6 +140,43 @@ func branchFromRef(ref string) string {
 	return strings.TrimPrefix(ref, "refs/heads/")
 }
 
+// loadTrustedRepoConfig reads .no-mistakes.yaml from origin/<defaultBranch> in
+// the worktree (the trusted default-branch copy, freshly fetched in startRun)
+// and parses it. It returns nil when no trusted copy is available — because the
+// default branch is unknown, its ref is missing, or the file is absent on it —
+// so the caller (EffectiveRepoConfig) can fall back to the safe behavior of
+// empty commands. All failure modes are logged; none are fatal, since the
+// pushed-branch copy is still read for non-executing fields.
+func loadTrustedRepoConfig(ctx context.Context, wtDir, defaultBranch, runID string) *config.RepoConfig {
+	if defaultBranch == "" {
+		return nil
+	}
+	ref := "origin/" + defaultBranch
+	exists, err := git.RefExists(ctx, wtDir, ref)
+	if err != nil {
+		slog.Warn("trusted repo config: could not verify default branch ref", "run_id", runID, "ref", ref, "error", err)
+		return nil
+	}
+	if !exists {
+		slog.Warn("trusted repo config: default branch ref not available; commands from pushed branch will be disabled", "run_id", runID, "ref", ref)
+		return nil
+	}
+	content, err := git.ShowFile(ctx, wtDir, ref, ".no-mistakes.yaml")
+	if err != nil {
+		// Path absent on the default branch is the common "repo has no trusted
+		// commands" case; log at debug so it isn't noisy. Other errors are
+		// surfaced at warn so a genuinely broken fetch isn't silent.
+		slog.Debug("trusted repo config: not present on default branch", "run_id", runID, "ref", ref, "error", err)
+		return nil
+	}
+	trusted, err := config.LoadRepoFromBytes([]byte(content))
+	if err != nil {
+		slog.Warn("trusted repo config: parse failed; commands from pushed branch will be disabled", "run_id", runID, "ref", ref, "error", err)
+		return nil
+	}
+	return trusted
+}
+
 // HandlePushReceived processes a push notification from the post-receive hook.
 // It creates a run, sets up a worktree, and launches pipeline execution in the background.
 func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushReceivedParams) (string, error) {
@@ -309,7 +346,26 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		trackStartFailure("load_repo_config")
 		return "", fmt.Errorf("load repo config: %w", err)
 	}
-	cfg := config.Merge(globalCfg, repoCfg)
+	// SECURITY: load the code-executing fields (commands.*) from the trusted
+	// default-branch copy of .no-mistakes.yaml rather than the pushed SHA. The
+	// worktree is checked out at headSHA (the contributor's branch), so reading
+	// repoCfg above would honor a contributor's commands and let any pushed SHA
+	// run arbitrary shell (sh -c) on the daemon host with the maintainer's env
+	// (GH_TOKEN, SSH agent, ...). EffectiveRepoConfig replaces Commands with the
+	// trusted default-branch values unless the maintainer has explicitly opted
+	// in via allow_repo_commands in global config. Non-executing fields stay on
+	// the pushed copy to preserve existing behavior.
+	trustedRepoCfg := loadTrustedRepoConfig(ctx, wtDir, repo.DefaultBranch, run.ID)
+	effectiveRepoCfg := config.EffectiveRepoConfig(repoCfg, trustedRepoCfg, globalCfg.AllowRepoCommands)
+	if globalCfg.AllowRepoCommands {
+		slog.Warn("allow_repo_commands is enabled: honoring commands from pushed branch", "run_id", run.ID, "branch", branch)
+	} else if repoCfg.Commands != effectiveRepoCfg.Commands {
+		// Surface the silent override so a maintainer who shipped a commands.*
+		// change on a feature branch understands why it did not run. This is
+		// not an error: it is the secure default in action.
+		slog.Info("repo commands loaded from default branch, not pushed branch", "run_id", run.ID, "branch", branch, "default_branch", repo.DefaultBranch)
+	}
+	cfg := config.Merge(globalCfg, effectiveRepoCfg)
 
 	// Create agent. In demo mode, skip resolution and use a no-op agent.
 	var ag agent.Agent
