@@ -54,7 +54,9 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 
 	ref := normalizedBranchRef(sctx.Run.Branch)
 
-	upstream := sctx.Repo.UpstreamURL
+	// Push to the fork when one is configured (fork-based contributions), else
+	// to upstream. sctx.Repo.PushURL() centralizes that decision.
+	upstream := sctx.Repo.PushURL()
 	sctx.Log(fmt.Sprintf("pushing to %s (%s)...", upstream, ref))
 
 	// Query upstream for current ref SHA to enable safe --force-with-lease.

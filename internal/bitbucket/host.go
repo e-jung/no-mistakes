@@ -13,13 +13,21 @@ import (
 
 // Host implements scm.Host for Bitbucket using the REST API client.
 type Host struct {
-	client *Client
-	repo   RepoRef
+	client   *Client
+	repo     RepoRef
+	forkRepo RepoRef // fork source repo; zero value means "not a fork"
 }
 
 // NewHost builds a Host from an API client and a parsed repository reference.
 func NewHost(client *Client, repo RepoRef) *Host {
-	return &Host{client: client, repo: repo}
+	return NewHostWithFork(client, repo, RepoRef{})
+}
+
+// NewHostWithFork is like NewHost but records a fork source repo. When non-zero,
+// PR lookups and creations source the branch from the fork while targeting repo
+// (the parent). A zero forkRepo is exactly equivalent to NewHost.
+func NewHostWithFork(client *Client, repo, forkRepo RepoRef) *Host {
+	return &Host{client: client, repo: repo, forkRepo: forkRepo}
 }
 
 func (h *Host) Provider() scm.Provider { return scm.ProviderBitbucket }
@@ -38,7 +46,7 @@ func (h *Host) Available(_ context.Context) error {
 }
 
 func (h *Host) FindPR(ctx context.Context, branch, base string) (*scm.PR, error) {
-	pr, err := h.client.FindOpenPRBySourceBranch(ctx, h.repo, branch, base)
+	pr, err := h.client.FindOpenPRBySourceBranchAndRepo(ctx, h.repo, h.forkRepo, branch, base)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +57,7 @@ func (h *Host) FindPR(ctx context.Context, branch, base string) (*scm.PR, error)
 }
 
 func (h *Host) CreatePR(ctx context.Context, branch, base string, content scm.PRContent) (*scm.PR, error) {
-	pr, err := h.client.CreatePR(ctx, h.repo, branch, base, content.Title, content.Body)
+	pr, err := h.client.CreatePRFromSourceRepo(ctx, h.repo, h.forkRepo, branch, base, content.Title, content.Body)
 	if err != nil {
 		return nil, err
 	}

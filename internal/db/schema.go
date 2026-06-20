@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS repos (
     id             TEXT PRIMARY KEY,
     working_path   TEXT NOT NULL UNIQUE,
     upstream_url   TEXT NOT NULL,
+    fork_url       TEXT,
     default_branch TEXT NOT NULL DEFAULT 'main',
     created_at     INTEGER NOT NULL
 );
@@ -72,4 +73,5 @@ var migrationStatements = []string{
 	`ALTER TABLE runs ADD COLUMN intent_source TEXT`,
 	`ALTER TABLE runs ADD COLUMN intent_session_id TEXT`,
 	`ALTER TABLE runs ADD COLUMN intent_score REAL`,
+	`ALTER TABLE repos ADD COLUMN fork_url TEXT`,
 }

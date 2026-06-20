@@ -114,10 +114,21 @@ func parseRepoPath(path string) (RepoRef, error) {
 }
 
 func (c *Client) FindOpenPRBySourceBranch(ctx context.Context, repo RepoRef, branch, destBranch string) (*PullRequest, error) {
+	return c.FindOpenPRBySourceBranchAndRepo(ctx, repo, RepoRef{}, branch, destBranch)
+}
+
+// FindOpenPRBySourceBranchAndRepo is like FindOpenPRBySourceBranch but allows
+// the source repository to differ from repo (the parent). For fork-based
+// contributions sourceRepo is the fork; when zero, repo is used as the source
+// (the historical behavior).
+func (c *Client) FindOpenPRBySourceBranchAndRepo(ctx context.Context, repo, sourceRepo RepoRef, branch, destBranch string) (*PullRequest, error) {
+	if sourceRepo.Workspace == "" || sourceRepo.RepoSlug == "" {
+		sourceRepo = repo
+	}
 	query := url.Values{}
 	clauses := []string{
 		fmt.Sprintf(`source.branch.name=%q`, branch),
-		fmt.Sprintf(`source.repository.full_name=%q`, repo.Workspace+"/"+repo.RepoSlug),
+		fmt.Sprintf(`source.repository.full_name=%q`, sourceRepo.Workspace+"/"+sourceRepo.RepoSlug),
 	}
 	if strings.TrimSpace(destBranch) != "" {
 		clauses = append(clauses, fmt.Sprintf(`destination.branch.name=%q`, destBranch))
@@ -138,12 +149,24 @@ func (c *Client) FindOpenPRBySourceBranch(ctx context.Context, repo RepoRef, bra
 }
 
 func (c *Client) CreatePR(ctx context.Context, repo RepoRef, sourceBranch, destBranch, title, body string) (*PullRequest, error) {
+	return c.CreatePRFromSourceRepo(ctx, repo, RepoRef{}, sourceBranch, destBranch, title, body)
+}
+
+// CreatePRFromSourceRepo is like CreatePR but the source repository can be a
+// fork (sourceRepo). When sourceRepo is zero, the source is repo itself.
+func (c *Client) CreatePRFromSourceRepo(ctx context.Context, repo, sourceRepo RepoRef, sourceBranch, destBranch, title, body string) (*PullRequest, error) {
+	source := map[string]any{
+		"branch": map[string]string{"name": sourceBranch},
+	}
+	if sourceRepo.Workspace != "" && sourceRepo.RepoSlug != "" {
+		source["repository"] = map[string]any{
+			"full_name": sourceRepo.Workspace + "/" + sourceRepo.RepoSlug,
+		}
+	}
 	requestBody := map[string]any{
 		"title":       title,
 		"description": body,
-		"source": map[string]any{
-			"branch": map[string]string{"name": sourceBranch},
-		},
+		"source":      source,
 		"destination": map[string]any{
 			"branch": map[string]string{"name": destBranch},
 		},

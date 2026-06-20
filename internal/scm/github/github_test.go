@@ -42,6 +42,32 @@ func TestRepoSlug(t *testing.T) {
 	}
 }
 
+// TestNewWithForkHeadRef verifies the cross-repo --head form that unblocks
+// fork→parent PRs. With a fork recorded, CreatePR/FindPR must pass
+// "<fork_owner>:<branch>" to gh; without a fork, the bare branch is kept.
+func TestNewWithForkHeadRef(t *testing.T) {
+	t.Parallel()
+
+	nonFork := New(nil, nil, "kunchenguid/repo")
+	if got := nonFork.headRef("feature"); got != "feature" {
+		t.Errorf("non-fork headRef = %q, want bare feature", got)
+	}
+
+	fork := NewWithFork(nil, nil, "kunchenguid/repo", "e-jung/repo")
+	if got := fork.headRef("feature"); got != "e-jung:feature" {
+		t.Errorf("fork headRef = %q, want e-jung:feature", got)
+	}
+
+	// New must be equivalent to NewWithFork with an empty fork.
+	if got := NewWithFork(nil, nil, "kunchenguid/repo", "").headRef("feature"); got != "feature" {
+		t.Errorf("empty-fork headRef = %q, want bare feature", got)
+	}
+	// A malformed fork slug (no owner) falls back to the bare branch, never "".
+	if got := NewWithFork(nil, nil, "kunchenguid/repo", "/repo").headRef("feature"); got != "feature" {
+		t.Errorf("malformed-fork headRef = %q, want bare feature", got)
+	}
+}
+
 func TestGetChecksPassesRepoFlag(t *testing.T) {
 	t.Parallel()
 

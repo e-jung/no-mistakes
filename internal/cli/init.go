@@ -15,13 +15,17 @@ const banner = `_  _ ____    _  _ _ ____ ___ ____ _  _ ____ ____
 | \| |__|    |  | | ___]  |  |  | | \_ |___ ___]`
 
 func newInitCmd() *cobra.Command {
-	return &cobra.Command{
+	var forkURL string
+	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize no-mistakes gate for the current repository",
 		Long: "Sets up or refreshes a local bare repo as a gate, installs a post-receive hook,\n" +
 			"best-effort isolates the gate hook path from shared local git config writes when Git supports `config --worktree`,\n" +
 			"adds or repairs the \"no-mistakes\" git remote, and records the repo in the database.\n\n" +
-			"Run this from inside a git repository that has an \"origin\" remote.",
+			"Run this from inside a git repository that has an \"origin\" remote.\n\n" +
+			"Fork contributors: point \"origin\" at the read-only parent repo and pass --fork-url to the\n" +
+			"contributor's fork. Pushes then land on the fork while pull requests open against the parent:\n" +
+			"  git remote set-url origin <parent-url> && no-mistakes init --fork-url <fork-url>",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return trackCommand("init", func() error {
@@ -31,7 +35,7 @@ func newInitCmd() *cobra.Command {
 				}
 				defer d.Close()
 
-				repo, created, err := gate.Init(cmd.Context(), d, p, ".")
+				repo, created, err := gate.InitWithFork(cmd.Context(), d, p, ".", forkURL)
 				if err != nil {
 					return fmt.Errorf("init: %w", err)
 				}
@@ -63,6 +67,9 @@ func newInitCmd() *cobra.Command {
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  repo"), repo.WorkingPath)
 				fmt.Fprintf(w, "  %s  no-mistakes → %s\n", sDim.Render("  gate"), p.RepoDir(repo.ID))
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("remote"), repo.UpstreamURL)
+				if repo.ForkURL != "" {
+					fmt.Fprintf(w, "  %s  %s  %s\n", sDim.Render("  fork"), repo.ForkURL, sDim.Render("(push target)"))
+				}
 				if skillErr != nil {
 					fmt.Fprintf(w, "  %s  %s\n", sDim.Render(" skill"), sYellow.Render("skipped: "+skillErr.Error()))
 				} else {
@@ -78,4 +85,6 @@ func newInitCmd() *cobra.Command {
 			})
 		},
 	}
+	cmd.Flags().StringVar(&forkURL, "fork-url", "", "Contributor's fork URL to push to (PR still opens against origin/parent)")
+	return cmd
 }

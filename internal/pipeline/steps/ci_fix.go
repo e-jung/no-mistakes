@@ -141,7 +141,9 @@ func (s *CIStep) commitAndPush(sctx *pipeline.StepContext) (bool, error) {
 func (s *CIStep) pushUpdatedHeadSHA(sctx *pipeline.StepContext, newHeadSHA string) (bool, error) {
 	ref := normalizedBranchRef(sctx.Run.Branch)
 
-	upstreamSHA, lsErr := stepGitLsRemote(sctx, sctx.Repo.UpstreamURL, ref)
+	// Push to the fork when configured (fork-based contributions), else upstream.
+	pushURL := sctx.Repo.PushURL()
+	upstreamSHA, lsErr := stepGitLsRemote(sctx, pushURL, ref)
 	if lsErr != nil {
 		slog.Warn("ls-remote failed, pushing without force-with-lease", "ref", ref, "error", lsErr)
 	} else if upstreamSHA == newHeadSHA {
@@ -154,7 +156,7 @@ func (s *CIStep) pushUpdatedHeadSHA(sctx *pipeline.StepContext, newHeadSHA strin
 		}
 		return false, nil
 	}
-	if err := stepGitPush(sctx, sctx.Repo.UpstreamURL, ref, upstreamSHA, upstreamSHA != ""); err != nil {
+	if err := stepGitPush(sctx, pushURL, ref, upstreamSHA, upstreamSHA != ""); err != nil {
 		if lsErr != nil {
 			return false, fmt.Errorf("push (ls-remote failed: %v): %w", lsErr, err)
 		}

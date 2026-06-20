@@ -57,6 +57,13 @@ Safest local verification sequence after non-trivial changes:
 - `internal/git`, `internal/ipc`, `internal/config`, `internal/db`, `internal/paths`, `internal/types`: shared infrastructure
 - `internal/tui`: terminal UI
 
+**Fork-based contributions (push to fork, PR to parent)**
+
+- `repos.upstream_url` is the PR base (parent); `repos.fork_url` (nullable, `Repo.ForkURL`) is the push target for fork contributors. Empty `fork_url` = historical behavior (one URL for both). No regression for non-fork repos.
+- The single decision point for the push target is `Repo.PushURL()` (fork when set, else upstream) — used by the push step and the CI auto-fix push path. Do not re-derive it inline.
+- `no-mistakes init --fork-url <url>` records the fork (origin must be the parent). GitHub PR creation then emits `--head <fork_owner>:<branch>` against the parent (`--repo`); Bitbucket sources the branch from the fork's repo; GitLab carries the fork identity on the host (glab fork MRs need follow-up for daemon-driven project context).
+- The failure mode this fixes is silent: a fork self-PR returns HTTP 200 and looks like success. Guard tests live at `TestPushStep_TargetsForkWhenForkURLSet` and `TestPRStep_ForkCreatesCrossRepoPR` — assert both the base repo and the `<fork>:<branch>` head form when touching this area.
+
 **Documentation**
 
 - Keep `README.md` concise and high-level. The bar needs to be extremely high for what has to show up there.

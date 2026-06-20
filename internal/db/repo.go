@@ -6,12 +6,29 @@ import (
 )
 
 // Repo represents a registered repository.
+//
+// UpstreamURL is the parent (PR base) remote — the repository pull requests are
+// opened against. ForkURL, when non-empty, is the contributor's fork and the
+// git push target. When ForkURL is empty the repo is not a fork contribution
+// and UpstreamURL is used for both push and PR (the historical behavior).
 type Repo struct {
 	ID            string
 	WorkingPath   string
 	UpstreamURL   string
+	ForkURL       string
 	DefaultBranch string
 	CreatedAt     int64
+}
+
+// PushURL returns the git URL that pushes should target: the fork when set
+// (fork-based contributions), otherwise the upstream/parent. This is the single
+// place that decides where commits land, so push and PR can be routed to
+// different repositories.
+func (r *Repo) PushURL() string {
+	if r != nil && r.ForkURL != "" {
+		return r.ForkURL
+	}
+	return r.UpstreamURL
 }
 
 // InsertRepoWithID creates a new repo record with a caller-provided ID.
@@ -56,8 +73,8 @@ func (d *DB) InsertRepo(workingPath, upstreamURL, defaultBranch string) (*Repo, 
 func (d *DB) GetRepo(id string) (*Repo, error) {
 	r := &Repo{}
 	err := d.sql.QueryRow(
-		`SELECT id, working_path, upstream_url, default_branch, created_at FROM repos WHERE id = ?`, id,
-	).Scan(&r.ID, &r.WorkingPath, &r.UpstreamURL, &r.DefaultBranch, &r.CreatedAt)
+		`SELECT id, working_path, upstream_url, COALESCE(fork_url, ''), default_branch, created_at FROM repos WHERE id = ?`, id,
+	).Scan(&r.ID, &r.WorkingPath, &r.UpstreamURL, &r.ForkURL, &r.DefaultBranch, &r.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -71,8 +88,8 @@ func (d *DB) GetRepo(id string) (*Repo, error) {
 func (d *DB) GetRepoByPath(workingPath string) (*Repo, error) {
 	r := &Repo{}
 	err := d.sql.QueryRow(
-		`SELECT id, working_path, upstream_url, default_branch, created_at FROM repos WHERE working_path = ?`, workingPath,
-	).Scan(&r.ID, &r.WorkingPath, &r.UpstreamURL, &r.DefaultBranch, &r.CreatedAt)
+		`SELECT id, working_path, upstream_url, COALESCE(fork_url, ''), default_branch, created_at FROM repos WHERE working_path = ?`, workingPath,
+	).Scan(&r.ID, &r.WorkingPath, &r.UpstreamURL, &r.ForkURL, &r.DefaultBranch, &r.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -83,11 +100,12 @@ func (d *DB) GetRepoByPath(workingPath string) (*Repo, error) {
 }
 
 // UpdateRepoMetadata refreshes mutable repository metadata while preserving the
-// stable repo ID and created_at timestamp.
-func (d *DB) UpdateRepoMetadata(id, upstreamURL, defaultBranch string) (*Repo, error) {
+// stable repo ID and created_at timestamp. forkURL is the contributor's fork
+// push target (empty for non-fork repos); upstreamURL is the PR base (parent).
+func (d *DB) UpdateRepoMetadata(id, upstreamURL, forkURL, defaultBranch string) (*Repo, error) {
 	_, err := d.sql.Exec(
-		`UPDATE repos SET upstream_url = ?, default_branch = ? WHERE id = ?`,
-		upstreamURL, defaultBranch, id,
+		`UPDATE repos SET upstream_url = ?, fork_url = ?, default_branch = ? WHERE id = ?`,
+		upstreamURL, nullableString(forkURL), defaultBranch, id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update repo metadata: %w", err)
@@ -116,4 +134,16 @@ func (d *DB) DeleteRepo(id string) error {
 		return fmt.Errorf("delete repo: %w", err)
 	}
 	return nil
+}
+
+// nullableString returns a value suitable for an Exec argument that stores NULL
+// when the string is empty, so fork_url stays genuinely NULL for non-fork repos
+// (matching the column's documented nullable semantics). Reading NULL back into
+// a Go string yields "" (database/sql converts nil to the zero value), so the
+// empty-string check used throughout the codebase keeps working.
+func nullableString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

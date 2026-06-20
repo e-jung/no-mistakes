@@ -22,16 +22,24 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 	}
 	switch provider {
 	case scm.ProviderGitHub:
-		// Resolve the owner/name slug so gh commands carry --repo and work from
-		// the daemon's fixed (non-repo) working directory. Fall back to the PR
-		// URL when the upstream remote URL is unavailable.
+		// Resolve the parent owner/name slug so gh commands carry --repo and
+		// work from the daemon's fixed (non-repo) working directory. Fall back
+		// to the PR URL when the upstream remote URL is unavailable.
 		repo := github.RepoSlug(sctx.Repo.UpstreamURL)
 		if repo == "" && sctx.Run.PRURL != nil {
 			repo = github.RepoSlug(*sctx.Run.PRURL)
 		}
-		return github.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, repo), ""
+		// For fork contributions, also resolve the fork slug so PR creation
+		// emits --head "<fork_owner>:<branch>" against the parent (--repo).
+		forkRepo := github.RepoSlug(sctx.Repo.ForkURL)
+		return github.NewWithFork(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, repo, forkRepo), ""
 	case scm.ProviderGitLab:
-		return gitlab.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }), ""
+		// github.RepoSlug parses any owner/name remote URL regardless of host,
+		// so it works for GitLab fork URLs too. glab resolves the MR project
+		// from the working repo rather than a flag, so this only labels the
+		// fork identity for now; see gitlab.NewWithFork.
+		forkProject := github.RepoSlug(sctx.Repo.ForkURL)
+		return gitlab.NewWithFork(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, forkProject), ""
 	case scm.ProviderBitbucket:
 		client, err := bitbucket.NewClientFromEnv(sctx.Env)
 		if err != nil {
@@ -41,7 +49,8 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 		if err != nil {
 			return nil, err.Error()
 		}
-		return bitbucket.NewHost(client, repo), ""
+		forkRepo, _ := resolveBitbucketRepoRef(sctx.Repo.ForkURL, nil)
+		return bitbucket.NewHostWithFork(client, repo, forkRepo), ""
 	default:
 		return nil, fmt.Sprintf("provider %s is not supported yet", provider)
 	}

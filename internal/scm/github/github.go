@@ -20,7 +20,8 @@ type CmdFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 type Host struct {
 	cmd          CmdFactory
 	cliAvailable func() bool
-	repo         string // "owner/name" slug for --repo; empty when unknown
+	repo         string // parent "owner/name" slug for --repo (PR base); empty when unknown
+	forkRepo     string // fork "owner/name" slug; when set, --head becomes "<fork_owner>:<branch>"
 }
 
 // New builds a Host. cliAvailable reports whether the gh binary is
@@ -30,7 +31,16 @@ type Host struct {
 // directory. The daemon runs from a fixed, non-repo working dir, so without
 // this gh cannot infer the repo (or branch) and fails on every poll.
 func New(cmd CmdFactory, cliAvailable func() bool, repo string) *Host {
-	return &Host{cmd: cmd, cliAvailable: cliAvailable, repo: strings.TrimSpace(repo)}
+	return NewWithFork(cmd, cliAvailable, repo, "")
+}
+
+// NewWithFork is like New but additionally records a fork slug. When forkRepo
+// is non-empty, PR operations emit --head "<fork_owner>:<branch>" so the PR
+// opens against the parent (--repo) with the branch sourced from the fork —
+// the cross-repo form gh requires. An empty forkRepo is exactly equivalent to
+// New (no behavior change for non-fork repos).
+func NewWithFork(cmd CmdFactory, cliAvailable func() bool, repo, forkRepo string) *Host {
+	return &Host{cmd: cmd, cliAvailable: cliAvailable, repo: strings.TrimSpace(repo), forkRepo: strings.TrimSpace(forkRepo)}
 }
 
 // RepoSlug extracts the "owner/name" identifier from a GitHub remote or PR URL.
@@ -78,6 +88,20 @@ func (h *Host) repoArgs() []string {
 	return []string{"--repo", h.repo}
 }
 
+// headRef returns the --head value for pr create / pr list. For fork-based
+// contributions it is "<fork_owner>:<branch>" (the cross-repo form gh requires
+// when --repo is the parent); otherwise it is the bare branch name.
+func (h *Host) headRef(branch string) string {
+	if h.forkRepo == "" {
+		return branch
+	}
+	owner, _, _ := strings.Cut(h.forkRepo, "/")
+	if owner == "" {
+		return branch
+	}
+	return owner + ":" + branch
+}
+
 func (h *Host) Provider() scm.Provider { return scm.ProviderGitHub }
 
 func (h *Host) Capabilities() scm.Capabilities {
@@ -95,7 +119,7 @@ func (h *Host) Available(ctx context.Context) error {
 }
 
 func (h *Host) FindPR(ctx context.Context, branch, base string) (*scm.PR, error) {
-	args := []string{"pr", "list", "--head", branch}
+	args := []string{"pr", "list", "--head", h.headRef(branch)}
 	if strings.TrimSpace(base) != "" {
 		args = append(args, "--base", base)
 	}
@@ -127,7 +151,7 @@ func (h *Host) FindPR(ctx context.Context, branch, base string) (*scm.PR, error)
 
 func (h *Host) CreatePR(ctx context.Context, branch, base string, content scm.PRContent) (*scm.PR, error) {
 	args := append([]string{"pr", "create",
-		"--head", branch,
+		"--head", h.headRef(branch),
 		"--base", base,
 	}, h.repoArgs()...)
 	args = append(args, "--title", content.Title, "--body", content.Body)

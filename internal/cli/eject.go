@@ -32,6 +32,9 @@ and removes the repo record from the database.`,
 				fmt.Fprintln(w)
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  repo"), repo.WorkingPath)
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("remote"), repo.UpstreamURL)
+				if repo.ForkURL != "" {
+					fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  fork"), repo.ForkURL)
+				}
 				return nil
 			})
 		},

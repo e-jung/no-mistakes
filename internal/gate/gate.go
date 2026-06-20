@@ -36,7 +36,21 @@ func repoID(absPath string) string {
 // the gate identified by the leftover no-mistakes remote is reattached at the
 // new path, preserving its run history. The returned bool reports whether a
 // new gate was created (true) or an existing one was refreshed (false).
+//
+// Init preserves the historical behavior where the working repo's "origin"
+// remote is the single source of truth (used for both push and PR). Fork
+// contributors should use InitWithFork (or the CLI's --fork-url flag) to set a
+// separate fork push target.
 func Init(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.Repo, bool, error) {
+	return InitWithFork(ctx, d, p, workDir, "")
+}
+
+// InitWithFork is like Init but additionally records a forkURL as the push
+// target. When forkURL is non-empty, pushes land on the fork while the "origin"
+// remote (read here as upstreamURL) remains the PR base (parent). This is what
+// unblocks fork-based contributions: push to fork, PR to parent. An empty
+// forkURL is exactly equivalent to Init (no regression for non-fork repos).
+func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkURL string) (*db.Repo, bool, error) {
 	// Normalize worktrees back to the main repo root so one repo record works
 	// from either the main checkout or any attached worktree.
 	gitRoot, err := git.FindMainRepoRoot(workDir)
@@ -90,7 +104,7 @@ func Init(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.Re
 	branch := git.DefaultBranch(ctx, absRoot, "origin")
 
 	if existing != nil {
-		repo, err := d.UpdateRepoMetadata(existing.ID, upstreamURL, branch)
+		repo, err := d.UpdateRepoMetadata(existing.ID, upstreamURL, forkURL, branch)
 		if err != nil {
 			return nil, false, fmt.Errorf("update repo metadata: %w", err)
 		}
@@ -105,6 +119,15 @@ func Init(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.Re
 		git.RemoveRemote(ctx, absRoot, RemoteName)
 		os.RemoveAll(bareDir)
 		return nil, false, fmt.Errorf("insert repo: %w", err)
+	}
+
+	// Persist the fork push target for fork-based contributions. Non-fork repos
+	// skip this (forkURL empty) and keep the column NULL.
+	if strings.TrimSpace(forkURL) != "" {
+		repo, err = d.UpdateRepoMetadata(id, upstreamURL, forkURL, branch)
+		if err != nil {
+			return nil, false, fmt.Errorf("update repo fork url: %w", err)
+		}
 	}
 
 	slog.Info("gate initialized", "repo_id", id, "path", absRoot, "upstream", upstreamURL)

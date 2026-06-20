@@ -19,12 +19,22 @@ type CmdFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 type Host struct {
 	cmd          CmdFactory
 	cliAvailable func() bool
+	forkProject  string // fork "owner/name" when contributing from a fork; empty otherwise
 }
 
 // New builds a Host. cliAvailable reports whether the glab binary is
 // resolvable on the caller's PATH (possibly overridden by env).
 func New(cmd CmdFactory, cliAvailable func() bool) *Host {
-	return &Host{cmd: cmd, cliAvailable: cliAvailable}
+	return NewWithFork(cmd, cliAvailable, "")
+}
+
+// NewWithFork is like New but records the fork project. glab resolves the MR
+// project from the working repo / CWD rather than a --repo flag, so unlike the
+// GitHub host this does not yet rewrite the glab invocation; it carries the
+// fork identity so a future glab flag (or REST client) can route fork MRs to
+// the parent. An empty forkProject is exactly equivalent to New.
+func NewWithFork(cmd CmdFactory, cliAvailable func() bool, forkProject string) *Host {
+	return &Host{cmd: cmd, cliAvailable: cliAvailable, forkProject: strings.TrimSpace(forkProject)}
 }
 
 func (h *Host) Provider() scm.Provider { return scm.ProviderGitLab }

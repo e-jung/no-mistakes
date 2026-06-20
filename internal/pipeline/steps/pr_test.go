@@ -347,6 +347,42 @@ func TestPRStep_BitbucketCreatesNewPR(t *testing.T) {
 	}
 }
 
+// TestPRStep_BitbucketForkSourcesBranchFromFork mirrors the GitHub cross-repo
+// guard for Bitbucket's REST API: when ForkURL is set, the PR is created on the
+// PARENT repo (POST path) with the source.repository pointing at the fork. A
+// self-PR would POST to the fork and omit source.repository.
+func TestPRStep_BitbucketForkSourcesBranchFromFork(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	api := newFakeBitbucketPRAPI(t, 0, "")
+
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = fakeBitbucketEnv(api.server.URL)
+	// Parent = test/repo (matches the fake API path); fork = e-jung/repo.
+	sctx.Repo.UpstreamURL = "https://bitbucket.org/test/repo.git"
+	sctx.Repo.ForkURL = "https://bitbucket.org/e-jung/repo.git"
+
+	step := &PRStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatalf("PR step: %v", err)
+	}
+	if outcome.NeedsApproval {
+		t.Fatal("bitbucket PR step should never need approval")
+	}
+	if api.createCalls != 1 {
+		t.Fatalf("create calls = %d, want 1", api.createCalls)
+	}
+	// The create POST must target the PARENT and source the branch from the fork.
+	if !strings.Contains(api.lastCreateBody, `"full_name":"e-jung/repo"`) {
+		t.Errorf("expected Bitbucket fork PR source.repository.full_name = e-jung/repo, got %q", api.lastCreateBody)
+	}
+	if !strings.Contains(api.lastCreateBody, `"name":"feature"`) {
+		t.Errorf("expected source branch name in Bitbucket fork PR, got %q", api.lastCreateBody)
+	}
+}
+
 func TestPRStep_BitbucketCreatesNewPRWithoutHTMLLink(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -882,6 +918,71 @@ func TestPRStep_FallbackUsesWhatChangedAndIntent(t *testing.T) {
 	whatChangedIdx := strings.Index(ghLog, "## What Changed")
 	if intentIdx > whatChangedIdx {
 		t.Fatalf("expected ## Intent before ## What Changed in fallback, got:\n%s", ghLog)
+	}
+}
+
+// TestPRStep_ForkCreatesCrossRepoPR is the silent-failure guard for fork-based
+// contributions. The bug (issue #293): with one shared upstream URL, a fork PR
+// degenerates into a self-PR inside the fork — which returns HTTP 200 and looks
+// like success. This test asserts the two things that distinguish a real
+// fork→parent PR from a fork self-PR:
+//  1. --repo is the PARENT (PR base), not the fork.
+//  2. --head is "<fork_owner>:<branch>" (the cross-repo form gh requires),
+//     not the bare branch name.
+func TestPRStep_ForkCreatesCrossRepoPR(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	// No existing PR - pr list returns empty.
+	env, logFile := fakeGH(t, "")
+
+	findings := `{"findings":[],"summary":"clean","risk_level":"low","risk_rationale":"additive change"}`
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	// Fork contribution: upstream = parent (PR base), fork = push target.
+	sctx.Repo.UpstreamURL = "https://github.com/kunchenguid/firstmate.git"
+	sctx.Repo.ForkURL = "https://github.com/e-jung/firstmate.git"
+	reviewStep, err := sctx.DB.InsertStepResult(sctx.Run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.UpdateStepStatus(reviewStep.ID, types.StepStatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.SetStepFindings(reviewStep.ID, findings); err != nil {
+		t.Fatal(err)
+	}
+
+	step := &PRStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatalf("PR step: %v", err)
+	}
+	if outcome.NeedsApproval {
+		t.Fatal("pr step should never need approval")
+	}
+
+	logData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ghLog := string(logData)
+
+	// Must target the PARENT repo, not the fork. A self-PR would show the fork here.
+	if !strings.Contains(ghLog, "--repo kunchenguid/firstmate") {
+		t.Errorf("expected gh pr create to target the PARENT via --repo kunchenguid/firstmate, got:\n%s", ghLog)
+	}
+	if strings.Contains(ghLog, "--repo e-jung/firstmate") {
+		t.Errorf("gh pr create must NOT target the fork as --repo (that is a self-PR), got:\n%s", ghLog)
+	}
+	// Must use the cross-repo --head form: <fork_owner>:<branch>. The bare
+	// branch form is the bug — gh would look for the branch inside the parent.
+	if !strings.Contains(ghLog, "--head e-jung:feature") {
+		t.Errorf("expected cross-repo --head e-jung:feature (fork_owner:branch), got:\n%s", ghLog)
+	}
+	if strings.Contains(ghLog, "--head feature ") || strings.HasSuffix(strings.TrimSpace(ghLog), "--head feature") {
+		t.Errorf("gh pr create must not use bare --head feature for a fork, got:\n%s", ghLog)
 	}
 }
 

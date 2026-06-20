@@ -32,6 +32,9 @@ func newStatusCmd() *cobra.Command {
 
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  repo:"), repo.WorkingPath)
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("remote:"), repo.UpstreamURL)
+				if repo.ForkURL != "" {
+					fmt.Fprintf(w, "  %s  %s  %s\n", sDim.Render("  fork:"), repo.ForkURL, sDim.Render("(push target)"))
+				}
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  gate:"), p.RepoDir(repo.ID))
 
 				// Check daemon status.
