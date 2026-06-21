@@ -25,15 +25,9 @@ type GlobalConfig struct {
 	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
 	CITimeout            time.Duration       `yaml:"-"`
 	LogLevel             string              `yaml:"log_level"`
-	// AllowRepoCommands opts in to honoring code-executing fields
-	// (commands.{test,lint,format}) from a contributor's pushed branch
-	// instead of the trusted default-branch copy. Default false: repo
-	// commands are only ever loaded from the default branch so a pushed
-	// SHA cannot inject shell on the maintainer's daemon host.
-	AllowRepoCommands bool `yaml:"allow_repo_commands"`
-	AutoFix           AutoFixRaw
-	Intent            IntentRaw
-	Test              TestRaw
+	AutoFix              AutoFixRaw
+	Intent               IntentRaw
+	Test                 TestRaw
 }
 
 // globalConfigRaw is the on-disk YAML representation with duration as string.
@@ -46,7 +40,6 @@ type globalConfigRaw struct {
 	CITimeout            string              `yaml:"ci_timeout"`
 	BabysitTimeout       string              `yaml:"babysit_timeout"`
 	LogLevel             string              `yaml:"log_level"`
-	AllowRepoCommands    bool                `yaml:"allow_repo_commands"`
 	AutoFix              AutoFixRaw          `yaml:"auto_fix"`
 	Intent               IntentRaw           `yaml:"intent"`
 	Test                 TestRaw             `yaml:"test"`
@@ -57,9 +50,16 @@ type RepoConfig struct {
 	Agent          types.AgentName `yaml:"agent"`
 	Commands       Commands        `yaml:"commands"`
 	IgnorePatterns []string        `yaml:"ignore_patterns"`
-	AutoFix        AutoFixRaw      `yaml:"auto_fix"`
-	Intent         IntentRaw       `yaml:"intent"`
-	Test           TestRaw         `yaml:"test"`
+	// AllowRepoCommands opts in to honoring the code-executing selection
+	// fields (commands.{test,lint,format} and agent) from a contributor's
+	// pushed branch instead of the trusted default-branch copy. It is read
+	// ONLY from the trusted default-branch copy of .no-mistakes.yaml (never
+	// the pushed SHA), so a contributor cannot self-enable. Default false:
+	// the pushed branch controls nothing that executes.
+	AllowRepoCommands bool       `yaml:"allow_repo_commands"`
+	AutoFix           AutoFixRaw `yaml:"auto_fix"`
+	Intent            IntentRaw  `yaml:"intent"`
+	Test              TestRaw    `yaml:"test"`
 }
 
 // Commands holds optional per-repo command overrides.
@@ -481,7 +481,6 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 	if raw.LogLevel != "" {
 		cfg.LogLevel = raw.LogLevel
 	}
-	cfg.AllowRepoCommands = raw.AllowRepoCommands
 	if raw.AutoFix.CI == nil {
 		raw.AutoFix.CI = raw.AutoFix.Babysit
 	}
@@ -532,18 +531,22 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 // EffectiveRepoConfig returns the repo config that should drive the pipeline
 // given a pushed-branch copy and the trusted default-branch copy.
 //
-// Code-executing fields (Commands) are taken only from the trusted copy when
-// it is present, so a contributor's pushed branch cannot inject shell
-// commands that run on the maintainer's daemon host. When allowRepoCommands
-// is true the maintainer has explicitly opted in to honoring the
-// pushed-branch commands. When there is no trusted copy and the maintainer
-// has not opted in, Commands is forced empty rather than falling back to the
-// pushed branch — this blocks the supply-chain vector for repos that ship
-// .no-mistakes.yaml only on feature branches.
+// The code-executing selection fields — Commands (run verbatim via sh -c on
+// the daemon host) and Agent (selects which process launches with the
+// maintainer's credentials, including acp: targets) — are taken only from
+// the trusted copy when it is present, so a contributor's pushed branch
+// cannot inject shell or pick an agent. When allowRepoCommands is true the
+// maintainer has explicitly opted in (via allow_repo_commands on the
+// TRUSTED default-branch copy) to honoring the pushed-branch copy wholesale.
+// When there is no trusted copy and the maintainer has not opted in, both
+// fields are forced empty (Agent "" inherits the global agent; Commands{}
+// yields built-in defaults) rather than falling back to the pushed branch —
+// this blocks the supply-chain vector for repos that ship .no-mistakes.yaml
+// only on feature branches.
 //
-// Non-executing fields (agent override, ignore patterns, auto-fix, intent,
-// test) are always taken from the pushed copy, matching prior behavior, since
-// they cannot run arbitrary shell.
+// Non-executing fields (ignore patterns, auto-fix, intent, test) are always
+// taken from the pushed copy, matching prior behavior, since they cannot
+// run arbitrary shell or select a process.
 func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
 	if pushed == nil {
 		pushed = &RepoConfig{}
@@ -554,8 +557,10 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 	}
 	if trusted != nil {
 		effective.Commands = trusted.Commands
+		effective.Agent = trusted.Agent
 	} else {
 		effective.Commands = Commands{}
+		effective.Agent = ""
 	}
 	return &effective
 }

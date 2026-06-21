@@ -56,13 +56,14 @@ type SetupOpts struct {
 	// fake agent uses its built-in clean-response default.
 	Scenario string
 
-	// AllowRepoCommands controls the global-config allow_repo_commands
-	// opt-in. The harness models a trusted single-developer environment
-	// (the same user owns the working clone, gate, and daemon), so it
-	// defaults to true: feature-branch commands run as before. Tests that
-	// verify the supply-chain hardening (commands must come from the
-	// trusted default branch) pass a pointer to false to exercise the
-	// secure default.
+	// AllowRepoCommands controls the per-repo allow_repo_commands opt-in
+	// committed to the trusted default-branch .no-mistakes.yaml (never the
+	// global config, and never the pushed branch). The harness models a
+	// trusted single-developer environment (the same user owns the working
+	// clone, gate, and daemon), so it defaults to true: feature-branch
+	// commands run as before. Tests that verify the supply-chain hardening
+	// (commands must come from the trusted default branch) pass a pointer
+	// to false to exercise the secure default.
 	AllowRepoCommands *bool
 }
 
@@ -166,17 +167,8 @@ func (h *Harness) writeGlobalConfig() {
 		h.t.Fatalf("mkdir nm home: %v", err)
 	}
 	binLink := filepath.Join(h.BinDir, h.agentName)
-	// allow_repo_commands defaults to true: the harness models a trusted
-	// single-developer environment where the same user owns every branch,
-	// so honoring feature-branch commands matches prior behavior. Security
-	// tests override this via SetupOpts.AllowRepoCommands = false.
-	allowRepoCommands := true
-	if h.allowRepoCommands != nil {
-		allowRepoCommands = *h.allowRepoCommands
-	}
 	cfg := fmt.Sprintf(`agent: %s
 log_level: debug
-allow_repo_commands: %t
 agent_path_override:
   %s: %s
 auto_fix:
@@ -186,7 +178,7 @@ auto_fix:
   review: 0
   document: 0
   ci: 0
-`, h.agentName, allowRepoCommands, h.agentName, binLink)
+`, h.agentName, h.agentName, binLink)
 	if err := os.WriteFile(configPath, []byte(cfg), 0o644); err != nil {
 		h.t.Fatalf("write config: %v", err)
 	}
@@ -224,8 +216,18 @@ func (h *Harness) initGitRepos() {
 	if err := os.WriteFile(readme, []byte("# e2e\n"), 0o644); err != nil {
 		h.t.Fatalf("write readme: %v", err)
 	}
+	// allow_repo_commands is committed to the trusted default-branch copy of
+	// .no-mistakes.yaml (never global, never the pushed branch). The harness
+	// models a trusted single-developer environment where the same user owns
+	// every branch, so it defaults to true: feature-branch commands run as
+	// before. Security tests override via SetupOpts.AllowRepoCommands = false.
+	allowRepoCommands := true
+	if h.allowRepoCommands != nil {
+		allowRepoCommands = *h.allowRepoCommands
+	}
 	repoConfig := filepath.Join(h.WorkDir, ".no-mistakes.yaml")
-	if err := os.WriteFile(repoConfig, []byte("ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\n"), 0o644); err != nil {
+	repoCfg := fmt.Sprintf("ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\nallow_repo_commands: %t\n", allowRepoCommands)
+	if err := os.WriteFile(repoConfig, []byte(repoCfg), 0o644); err != nil {
 		h.t.Fatalf("write repo config: %v", err)
 	}
 	mustGit(h.WorkDir, "add", "README.md", ".no-mistakes.yaml")

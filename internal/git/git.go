@@ -341,6 +341,19 @@ func WorktreeRemove(ctx context.Context, repoDir, wtPath string) error {
 	return err
 }
 
+// ResolveRef returns the commit SHA that ref resolves to via
+// `git rev-parse --verify <ref>^{commit}`. Use it to pin an exact commit
+// (e.g. the default-branch tip just fetched) before reading a file from it,
+// so a shared-ref worktree cannot serve a stale remote-tracking ref. Returns
+// an error if the ref does not resolve to a commit.
+func ResolveRef(ctx context.Context, dir, ref string) (string, error) {
+	out, err := Run(ctx, dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolve ref %s: %w", ref, err)
+	}
+	return out, nil
+}
+
 // RefExists reports whether the given ref resolves to a commit. It uses
 // `git rev-parse --verify --quiet` so a missing ref is a clean (nil, false)
 // result rather than a loud error.

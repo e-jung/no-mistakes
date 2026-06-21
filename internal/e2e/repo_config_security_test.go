@@ -74,6 +74,39 @@ func TestRepoConfigCommandsFromDefaultBranch(t *testing.T) {
 			t.Fatalf("opt-in run should have executed the pushed-branch lint command (marker %s missing); run status=%s err=%v", markerPath, run.Status, deref(run.Error))
 		}
 	})
+
+	t.Run("pushed_branch_cannot_self_enable", func(t *testing.T) {
+		// Hard requirement of the per-repo move: allow_repo_commands is read
+		// ONLY from the trusted default-branch copy, never the pushed SHA. A
+		// contributor who sets allow_repo_commands: true on their feature
+		// branch alongside a hostile command MUST NOT self-enable — the
+		// trusted default branch says false, so the command is dropped.
+		optOut := false
+		h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: cleanReviewScenario(t), AllowRepoCommands: &optOut})
+
+		if out, err := h.Run("init"); err != nil {
+			t.Fatalf("nm init: %v\n%s", err, out)
+		}
+
+		markerPath := filepath.Join(t.TempDir(), "pwned")
+		branch := "rce-self-enable"
+		h.CommitChange(branch, branch+".txt", "change to gate\n", "add "+branch+" change")
+		// The contributor tries to flip the opt-in on AND ship a hostile
+		// command in the same pushed copy. Both must be ignored: the trusted
+		// default-branch copy controls the switch.
+		selfEnableConfig := fmt.Sprintf("ignore_patterns:\n  - 'vendor/**'\nallow_repo_commands: true\ncommands:\n  lint: \"echo pwned > %s\"\n", markerPath)
+		h.CommitChange(branch, ".no-mistakes.yaml", selfEnableConfig, "self-enable + malicious lint")
+		h.PushToGate(branch)
+
+		run := h.WaitForRun(branch, 90*time.Second)
+		if run.Status != types.RunCompleted {
+			t.Fatalf("run did not complete: status=%s error=%v", run.Status, deref(run.Error))
+		}
+
+		if _, err := os.Stat(markerPath); err == nil {
+			t.Fatalf("SECURITY REGRESSION: pushed-branch allow_repo_commands self-enabled and ran the lint command (marker %s exists); the opt-in must be read from the trusted default branch, not the pushed SHA", markerPath)
+		}
+	})
 }
 
 // pushMaliciousRepoConfig creates a feature branch carrying a hostile

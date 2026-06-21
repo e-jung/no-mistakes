@@ -41,6 +41,29 @@ func TestShowFile_AtHEAD(t *testing.T) {
 	}
 }
 
+func TestResolveRef(t *testing.T) {
+	ctx := context.Background()
+	repo := initTestRepo(t)
+	want := run(t, repo, "git", "rev-parse", "HEAD")
+
+	got, err := ResolveRef(ctx, repo, "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveRef HEAD: %v", err)
+	}
+	if got != want {
+		t.Errorf("ResolveRef HEAD = %q, want %q", got, want)
+	}
+}
+
+func TestResolveRef_MissingRef(t *testing.T) {
+	ctx := context.Background()
+	repo := initTestRepo(t)
+
+	if _, err := ResolveRef(ctx, repo, "origin/does-not-exist"); err == nil {
+		t.Fatal("expected error resolving a missing ref")
+	}
+}
+
 func TestShowFile_AtBranchRef(t *testing.T) {
 	ctx := context.Background()
 	src := initTestRepo(t)
